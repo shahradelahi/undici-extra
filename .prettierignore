@@ -1,5 +1,5 @@
 .DS_Store
-.changeset
+.changeset/*.md
 node_modules
 build
 dist
