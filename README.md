@@ -16,7 +16,7 @@ _undici-extra_ wraps `undici.fetch` to provide an elegant and familiar API while
 - **Smart Dispatcher:** Automatic handling and caching for Proxies and Unix Sockets.
 - **Robust Retries:** Built-in retry logic with exponential backoff and customizable status codes.
 - **Request Lifecycle:** Flexible hooks for `beforeRequest`, `afterResponse`, and `beforeRetry`.
-- **Advanced Features:** Native support for Request Deduping, Pagination, and NDJSON streaming.
+- **Advanced Features:** Native support for Request Deduping, Pagination, and Node.js Streams (including NDJSON).
 - **Developer Friendly:** Zero-config cURL command logging for easier debugging.
 
 ---
@@ -143,6 +143,23 @@ const items = undici.paginate('https://api.example.com/events', {
 for await (const item of items) {
   console.log(item);
 }
+```
+
+### Streaming
+
+Seamlessly bridge Web Streams to Node.js streams with automatic error propagation and cleanup.
+
+```ts
+import fs from 'node:fs';
+
+// One-liner for piping to disk
+await undici('https://api.example.com/file.zip').pipe(
+  fs.createWriteStream('file.zip')
+);
+
+// Or get a Node.js Readable stream
+const stream = await undici('https://api.example.com/data').stream();
+stream.on('data', (chunk) => console.log(chunk.toString()));
 ```
 
 ### NDJSON
