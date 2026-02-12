@@ -1,8 +1,10 @@
-import type { Request } from 'undici';
+import { throttle } from '@se-oss/throttle';
+import { fetch as undiciFetch, type Request } from 'undici';
 
 import { createResponsePromise, type ResponsePromise } from './core/ResponsePromise';
-import { Undici } from './core/Undici';
+import { Undici, type UndiciDependencies } from './core/Undici';
 import type { UndiciOptions } from './types/options';
+import { generateCurlCommand } from './utils/curl';
 
 export { Undici } from './core/Undici';
 export { HTTPError } from './core/errors';
@@ -10,6 +12,14 @@ export * from './types/hooks';
 export * from './types/options';
 export * from './core/retry';
 export type { ResponsePromise } from './core/ResponsePromise';
+
+const fetchWithDebug = (input: string | URL | Request, init?: any) => {
+  if (init?.debug) {
+    // eslint-disable-next-line no-console
+    console.log(generateCurlCommand(input as Request));
+  }
+  return undiciFetch(input, init);
+};
 
 export type UndiciInstance = {
   /**
@@ -41,6 +51,9 @@ export type UndiciInstance = {
 
   /** Create a new instance by merging options with the current instance. */
   extend(extendedOptions: UndiciOptions): UndiciInstance;
+
+  /** Returns the number of requests currently queued by the throttler. */
+  readonly queueSize?: number;
 
   /**
    * Paginate through an API.
@@ -108,12 +121,35 @@ function mergeOptions(base: UndiciOptions, extended: UndiciOptions): UndiciOptio
   };
 }
 
-function createInstance(defaultOptions: UndiciOptions = {}): UndiciInstance {
+function createInstance(
+  defaultOptions: UndiciOptions = {},
+  dependencies?: UndiciDependencies
+): UndiciInstance {
+  let instanceFetch = dependencies?.fetch || (defaultOptions.throttle ? undefined : fetchWithDebug);
+
+  if (!instanceFetch && defaultOptions.throttle) {
+    instanceFetch = throttle(fetchWithDebug, defaultOptions.throttle);
+  }
+
   const instance = (input: string | URL | Request, options?: UndiciOptions) => {
     const combinedOptions = mergeOptions(defaultOptions, options || {});
-    const extra = new Undici(input, combinedOptions);
+
+    let fetchToUse = instanceFetch;
+    if (options?.throttle) {
+      fetchToUse = throttle(fetchWithDebug, options.throttle);
+    }
+
+    const extra = new Undici(input, combinedOptions, { fetch: fetchToUse });
     return createResponsePromise(extra.execute());
   };
+
+  if (instanceFetch && 'queueSize' in instanceFetch) {
+    Object.defineProperty(instance, 'queueSize', {
+      get: () => (instanceFetch as any).queueSize,
+      configurable: true,
+      enumerable: true,
+    });
+  }
 
   instance.get = (input: string | URL | Request, options?: UndiciOptions) =>
     instance(input, { ...options, method: 'GET' });
@@ -129,12 +165,26 @@ function createInstance(defaultOptions: UndiciOptions = {}): UndiciInstance {
     instance(input, { ...options, method: 'HEAD' });
 
   instance.create = (newOptions: UndiciOptions) => createInstance(newOptions);
-  instance.extend = (extendedOptions: UndiciOptions) =>
-    createInstance(mergeOptions(defaultOptions, extendedOptions));
+  instance.extend = (extendedOptions: UndiciOptions) => {
+    const newOptions = mergeOptions(defaultOptions, extendedOptions);
+    let nextDependencies: UndiciDependencies = {};
+
+    if (!extendedOptions.throttle) {
+      nextDependencies = { fetch: instanceFetch };
+    }
+
+    return createInstance(newOptions, nextDependencies);
+  };
 
   instance.paginate = <T = any>(input: string | URL | Request, options?: UndiciOptions) => {
     const combinedOptions = mergeOptions(defaultOptions, options || {});
-    const extra = new Undici(input, combinedOptions);
+
+    let fetchToUse = instanceFetch;
+    if (options?.throttle) {
+      fetchToUse = throttle(fetchWithDebug, options.throttle);
+    }
+
+    const extra = new Undici(input, combinedOptions, { fetch: fetchToUse });
     return extra.paginate<T>();
   };
 

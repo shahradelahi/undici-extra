@@ -16,7 +16,7 @@ _undici-extra_ wraps `undici.fetch` to provide an elegant and familiar API while
 - **Smart Dispatcher:** Automatic handling and caching for Proxies and Unix Sockets.
 - **Robust Retries:** Built-in retry logic with exponential backoff and customizable status codes.
 - **Request Lifecycle:** Flexible hooks for `beforeRequest`, `afterResponse`, and `beforeRetry`.
-- **Advanced Features:** Native support for Request Deduping, Pagination, and Node.js Streams (including NDJSON).
+- **Advanced Features:** Native support for Throttling, Request Deduping, Pagination, and Node.js Streams (including NDJSON).
 - **Developer Friendly:** Zero-config cURL command logging for easier debugging.
 
 ---
@@ -182,6 +182,22 @@ const [r1, r2] = await Promise.all([
   undici('https://api.com/data', { dedup: true }),
   undici('https://api.com/data', { dedup: true }),
 ]);
+```
+
+### Throttling
+
+Built-in rate limiting with support for shared buckets across extended clients.
+
+```ts
+const client = undici.extend({
+  throttle: { limit: 10, interval: 1000 }, // 10 requests per second
+});
+
+// These will be queued and executed at the specified rate
+await Promise.all([client('https://api.com/1'), client('https://api.com/2')]);
+
+// Monitor the queue
+console.log(client.queueSize);
 ```
 
 ### Debugging

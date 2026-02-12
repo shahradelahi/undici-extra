@@ -1,10 +1,19 @@
+import type { Options as ThrottleOptions } from '@se-oss/throttle';
 import type { RequestInit, Response } from 'undici';
 
 import type { RetryOptions } from '../core/retry';
 import type { ProxyInput } from '../utils/proxy';
 import type { Hooks } from './hooks';
 
+export type { ThrottleOptions };
+
 export interface UndiciOptions extends RequestInit {
+  /**
+   * Rate limit configuration.
+   * If provided, requests created from this client instance will be throttled.
+   */
+  throttle?: ThrottleOptions;
+
   /**
    * HTTP/HTTPS Proxy URL or Options.
    * Automatically creates and caches an `undici.ProxyAgent`.

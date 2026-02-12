@@ -1,21 +1,30 @@
-import { fetch, Request, Response } from 'undici';
+import { fetch as globalFetch, Request, Response } from 'undici';
 
 import type { UndiciOptions } from '../types/options';
-import { generateCurlCommand } from '../utils/curl';
 import { delay } from '../utils/delay';
 import { resolveDispatcher } from '../utils/proxy';
 import { HTTPError } from './errors';
 import { normalizeRetryOptions } from './retry';
+
+export interface UndiciDependencies {
+  fetch?: (request: Request, init?: any) => Promise<Response>;
+}
 
 export class Undici {
   static #pendingRequests = new Map<string, Promise<Response>>();
 
   #input: string | URL | Request;
   #options: UndiciOptions;
+  #dependencies: UndiciDependencies;
 
-  constructor(input: string | URL | Request, options: UndiciOptions = {}) {
+  constructor(
+    input: string | URL | Request,
+    options: UndiciOptions = {},
+    dependencies: UndiciDependencies = {}
+  ) {
     this.#input = input;
     this.#options = { ...options };
+    this.#dependencies = dependencies;
   }
 
   async #prepareRequest(): Promise<Request> {
@@ -87,16 +96,12 @@ export class Undici {
       proxy,
       dispatcher: customDispatcher,
       unixSocket,
+      debug,
     } = this.#options;
     const retryConfig = normalizeRetryOptions(retry);
     let retryCount = 0;
 
     const dispatcher = resolveDispatcher(customDispatcher as any, proxy, unixSocket);
-
-    if (this.#options.debug) {
-      // eslint-disable-next-line no-console
-      console.log(generateCurlCommand(activeRequest));
-    }
 
     // 1. Hook: beforeRequest
     if (hooks?.beforeRequest) {
@@ -106,6 +111,8 @@ export class Undici {
         if (result instanceof Request) activeRequest = result;
       }
     }
+
+    const performRequest = this.#dependencies.fetch || globalFetch;
 
     const makeRequest = async (req: Request) => {
       const finalRequest = retryCount > 0 ? req.clone() : req;
@@ -120,18 +127,20 @@ export class Undici {
             signals.push(this.#options.signal);
           }
 
-          return await fetch(finalRequest, {
+          return await performRequest(finalRequest, {
             dispatcher,
             signal: AbortSignal.any(signals),
+            debug,
           } as any);
         } finally {
           clearTimeout(timeoutId);
         }
       }
 
-      return fetch(finalRequest, {
+      return performRequest(finalRequest, {
         dispatcher,
         signal: this.#options.signal,
+        debug,
       } as any);
     };
 
@@ -185,7 +194,11 @@ export class Undici {
     const allItems: T[] = [];
 
     while (true) {
-      const extra = new Undici(currentInput, { ...this.#options, pagination: undefined });
+      const extra = new Undici(
+        currentInput,
+        { ...this.#options, pagination: undefined },
+        this.#dependencies
+      );
       const response = await extra.execute();
 
       const currentItems = pagination.transform
