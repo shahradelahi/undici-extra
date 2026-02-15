@@ -1,5 +1,15 @@
 # undici-extra
 
+## 1.2.0
+
+### Minor Changes
+
+- af021f4: Implemented built-in throttling support via `@se-oss/throttle` with intelligent rate-limit sharing across extended clients.
+
+### Patch Changes
+
+- af021f4: Refactored the core architecture to use closure-based state management and constructor injection, keeping options pure and serializable.
+
 ## 1.1.0
 
 ### Minor Changes
