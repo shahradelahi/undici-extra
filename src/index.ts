@@ -3,6 +3,7 @@ import type { Request } from 'undici';
 import { createResponsePromise, type ResponsePromise } from './core/ResponsePromise';
 import { Undici } from './core/Undici';
 import type { UndiciOptions } from './types/options';
+import { mergeOptions } from './utils/options';
 
 export { Undici } from './core/Undici';
 export { HTTPError } from './core/errors';
@@ -42,6 +43,9 @@ export type UndiciInstance = {
   /** Create a new instance by merging options with the current instance. */
   extend(extendedOptions: UndiciOptions): UndiciInstance;
 
+  /** Returns the number of requests currently queued by the throttler. */
+  readonly queueSize: number;
+
   /**
    * Paginate through an API.
    * @example
@@ -54,66 +58,18 @@ export type UndiciInstance = {
   paginate<T = any>(input: string | URL | Request, options?: UndiciOptions): AsyncIterable<T>;
 };
 
-function mergeOptions(base: UndiciOptions, extended: UndiciOptions): UndiciOptions {
-  const headers = new Headers(base.headers as any);
-  if (extended.headers) {
-    const extendedHeaders = new Headers(extended.headers as any);
-    for (const [key, value] of extendedHeaders) {
-      headers.set(key, value);
-    }
-  }
-
-  const hooks = { ...base.hooks };
-  if (extended.hooks) {
-    for (const key of Object.keys(extended.hooks) as Array<keyof typeof hooks>) {
-      hooks[key] = [...(hooks[key] || []), ...(extended.hooks[key] || [])] as any;
-    }
-  }
-
-  let { retry } = extended;
-  if (typeof base.retry === 'object' && typeof extended.retry === 'object') {
-    retry = { ...base.retry, ...extended.retry };
-  }
-
-  let { searchParams } = extended;
-  if (base.searchParams && extended.searchParams) {
-    const baseParams = new URLSearchParams(base.searchParams as any);
-    const extendedParams = new URLSearchParams(extended.searchParams as any);
-    for (const [key, value] of extendedParams) {
-      baseParams.set(key, value);
-    }
-    searchParams = baseParams;
-  } else if (base.searchParams) {
-    searchParams = new URLSearchParams(base.searchParams as any);
-  } else if (extended.searchParams) {
-    searchParams = new URLSearchParams(extended.searchParams as any);
-  }
-
-  let { signal } = extended;
-  if (base.signal && extended.signal) {
-    signal = AbortSignal.any([base.signal, extended.signal]);
-  } else if (base.signal) {
-    signal = base.signal;
-  }
-
-  return {
-    ...base,
-    ...extended,
-    headers,
-    hooks,
-    retry,
-    searchParams,
-    signal,
-    dispatcher: extended.dispatcher ?? base.dispatcher,
-  };
-}
-
 function createInstance(defaultOptions: UndiciOptions = {}): UndiciInstance {
+  const client = new Undici(defaultOptions);
+
   const instance = (input: string | URL | Request, options?: UndiciOptions) => {
-    const combinedOptions = mergeOptions(defaultOptions, options || {});
-    const extra = new Undici(input, combinedOptions);
-    return createResponsePromise(extra.execute());
+    return createResponsePromise(client.execute(input, options));
   };
+
+  Object.defineProperty(instance, 'queueSize', {
+    get: () => client.queueSize,
+    configurable: true,
+    enumerable: true,
+  });
 
   instance.get = (input: string | URL | Request, options?: UndiciOptions) =>
     instance(input, { ...options, method: 'GET' });
@@ -129,13 +85,13 @@ function createInstance(defaultOptions: UndiciOptions = {}): UndiciInstance {
     instance(input, { ...options, method: 'HEAD' });
 
   instance.create = (newOptions: UndiciOptions) => createInstance(newOptions);
-  instance.extend = (extendedOptions: UndiciOptions) =>
-    createInstance(mergeOptions(defaultOptions, extendedOptions));
+  instance.extend = (extendedOptions: UndiciOptions) => {
+    const newOptions = mergeOptions(defaultOptions, extendedOptions);
+    return createInstance(newOptions);
+  };
 
   instance.paginate = <T = any>(input: string | URL | Request, options?: UndiciOptions) => {
-    const combinedOptions = mergeOptions(defaultOptions, options || {});
-    const extra = new Undici(input, combinedOptions);
-    return extra.paginate<T>();
+    return client.paginate<T>(input, options);
   };
 
   return instance as UndiciInstance;

@@ -1,8 +1,10 @@
-import { fetch, Request, Response } from 'undici';
+import { throttle } from '@se-oss/throttle';
+import { Request, Response, fetch as undiciFetch } from 'undici';
 
 import type { UndiciOptions } from '../types/options';
 import { generateCurlCommand } from '../utils/curl';
 import { delay } from '../utils/delay';
+import { mergeOptions } from '../utils/options';
 import { resolveDispatcher } from '../utils/proxy';
 import { HTTPError } from './errors';
 import { normalizeRetryOptions } from './retry';
@@ -10,29 +12,40 @@ import { normalizeRetryOptions } from './retry';
 export class Undici {
   static #pendingRequests = new Map<string, Promise<Response>>();
 
-  #input: string | URL | Request;
   #options: UndiciOptions;
+  #throttler?: any;
 
-  constructor(input: string | URL | Request, options: UndiciOptions = {}) {
-    this.#input = input;
+  constructor(options: UndiciOptions = {}) {
     this.#options = { ...options };
+
+    if (options.throttle) {
+      this.#throttler = throttle(undiciFetch, options.throttle);
+    }
   }
 
-  async #prepareRequest(): Promise<Request> {
-    let { input } = this;
-    const { prefixUrl, json, headers, searchParams, ...rest } = this.#options;
+  get options(): UndiciOptions {
+    return this.#options;
+  }
 
-    if (prefixUrl && typeof input === 'string') {
-      input = new URL(input, prefixUrl).toString();
+  get queueSize(): number {
+    return this.#throttler?.queueSize ?? 0;
+  }
+
+  async #prepareRequest(input: string | URL | Request, options: UndiciOptions): Promise<Request> {
+    let finalInput = input;
+    const { prefixUrl, json, headers, searchParams, ...rest } = options;
+
+    if (prefixUrl && typeof finalInput === 'string') {
+      finalInput = new URL(finalInput, prefixUrl).toString();
     }
 
     if (searchParams) {
-      const url = new URL(input as string | URL);
+      const url = new URL(finalInput as string | URL);
       const params = new URLSearchParams(searchParams as any);
       for (const [key, value] of params) {
         url.searchParams.append(key, value);
       }
-      input = url.toString();
+      finalInput = url.toString();
     }
 
     const normalizedHeaders = new Headers(headers as any);
@@ -45,16 +58,13 @@ export class Undici {
       }
     }
 
-    return new Request(input, fetchOptions);
+    return new Request(finalInput, fetchOptions);
   }
 
-  get input(): string | URL | Request {
-    return this.#input;
-  }
-
-  async execute(): Promise<Response> {
-    const request = await this.#prepareRequest();
-    const { dedup } = this.#options;
+  async execute(input: string | URL | Request, options: UndiciOptions = {}): Promise<Response> {
+    const combinedOptions = mergeOptions(this.#options, options);
+    const request = await this.#prepareRequest(input, combinedOptions);
+    const { dedup } = combinedOptions;
 
     if (dedup) {
       const key = `${request.method}:${request.url}`;
@@ -64,7 +74,7 @@ export class Undici {
         return response.clone();
       }
 
-      const promise = this.#execute(request);
+      const promise = this.#execute(request, combinedOptions);
       Undici.#pendingRequests.set(key, promise);
       try {
         const response = await promise;
@@ -74,10 +84,10 @@ export class Undici {
       }
     }
 
-    return this.#execute(request);
+    return this.#execute(request, combinedOptions);
   }
 
-  async #execute(request: Request): Promise<Response> {
+  async #execute(request: Request, options: UndiciOptions): Promise<Response> {
     let activeRequest = request;
     const {
       retry,
@@ -87,28 +97,39 @@ export class Undici {
       proxy,
       dispatcher: customDispatcher,
       unixSocket,
-    } = this.#options;
+      debug,
+    } = options;
     const retryConfig = normalizeRetryOptions(retry);
     let retryCount = 0;
 
     const dispatcher = resolveDispatcher(customDispatcher as any, proxy, unixSocket);
 
-    if (this.#options.debug) {
-      // eslint-disable-next-line no-console
-      console.log(generateCurlCommand(activeRequest));
-    }
-
     // 1. Hook: beforeRequest
     if (hooks?.beforeRequest) {
       for (const hook of hooks.beforeRequest) {
-        const result = await hook(activeRequest, this.#options);
+        const result = await hook(activeRequest, options);
         if (result instanceof Response) return result;
         if (result instanceof Request) activeRequest = result;
       }
     }
 
+    let performRequest = this.#throttler || undiciFetch;
+    if (options.throttle && options.throttle !== this.#options.throttle) {
+      performRequest = throttle(undiciFetch, options.throttle);
+    }
+
     const makeRequest = async (req: Request) => {
       const finalRequest = retryCount > 0 ? req.clone() : req;
+
+      if (debug) {
+        // eslint-disable-next-line no-console
+        console.log(generateCurlCommand(finalRequest));
+      }
+
+      const fetchOptions: any = {
+        dispatcher,
+        signal: options.signal,
+      };
 
       if (timeout) {
         const controller = new AbortController();
@@ -116,23 +137,18 @@ export class Undici {
 
         try {
           const signals = [controller.signal];
-          if (this.#options.signal) {
-            signals.push(this.#options.signal);
+          if (options.signal) {
+            signals.push(options.signal);
           }
+          fetchOptions.signal = AbortSignal.any(signals);
 
-          return await fetch(finalRequest, {
-            dispatcher,
-            signal: AbortSignal.any(signals),
-          } as any);
+          return await performRequest(finalRequest, fetchOptions);
         } finally {
           clearTimeout(timeoutId);
         }
       }
 
-      return fetch(finalRequest, {
-        dispatcher,
-        signal: this.#options.signal,
-      } as any);
+      return performRequest(finalRequest, fetchOptions);
     };
 
     while (true) {
@@ -142,7 +158,7 @@ export class Undici {
         // 2. Hook: afterResponse
         if (hooks?.afterResponse) {
           for (const hook of hooks.afterResponse) {
-            const modified = await hook(activeRequest, this.#options, response);
+            const modified = await hook(activeRequest, options, response);
             if (modified instanceof Response) response = modified;
           }
         }
@@ -161,7 +177,7 @@ export class Undici {
           // 3. Hook: beforeRetry
           if (hooks?.beforeRetry) {
             for (const hook of hooks.beforeRetry) {
-              await hook({ request: activeRequest, options: this.#options, error, retryCount });
+              await hook({ request: activeRequest, options, error, retryCount });
             }
           }
 
@@ -175,18 +191,22 @@ export class Undici {
     }
   }
 
-  async *paginate<T = any>(): AsyncIterable<T> {
-    const { pagination } = this.#options;
+  async *paginate<T = any>(
+    input: string | URL | Request,
+    options: UndiciOptions = {}
+  ): AsyncIterable<T> {
+    const combinedOptions = mergeOptions(this.#options, options);
+    const { pagination } = combinedOptions;
+
     if (!pagination || !pagination.paginate) {
       throw new Error('Pagination options must be provided to use paginate()');
     }
 
-    let currentInput = this.#input;
+    let currentInput = input;
     const allItems: T[] = [];
 
     while (true) {
-      const extra = new Undici(currentInput, { ...this.#options, pagination: undefined });
-      const response = await extra.execute();
+      const response = await this.execute(currentInput, { ...options, pagination: undefined });
 
       const currentItems = pagination.transform
         ? await pagination.transform(response.clone())
