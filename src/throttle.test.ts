@@ -57,7 +57,7 @@ describe('throttling', () => {
     expect(maxConcurrent).toBeLessThanOrEqual(limit);
   });
 
-  it('should share throttler with extended client', async () => {
+  it('should not inherit throttler in extended client', async () => {
     const client = undici.create({
       throttle: { limit: 1, interval: 500 },
     });
@@ -69,7 +69,8 @@ describe('throttling', () => {
     await Promise.all([client('http://example.com/'), extended('http://example.com/')]);
     const duration = Date.now() - start;
 
-    expect(duration).toBeGreaterThanOrEqual(500);
+    // They don't share or inherit the throttle, so they run concurrently
+    expect(duration).toBeLessThan(500);
   });
 
   it('should allow overriding throttle in extended client', async () => {

@@ -1,10 +1,9 @@
-import { throttle } from '@se-oss/throttle';
-import { fetch as undiciFetch, type Request } from 'undici';
+import type { Request } from 'undici';
 
 import { createResponsePromise, type ResponsePromise } from './core/ResponsePromise';
-import { Undici, type UndiciDependencies } from './core/Undici';
+import { Undici } from './core/Undici';
 import type { UndiciOptions } from './types/options';
-import { generateCurlCommand } from './utils/curl';
+import { mergeOptions } from './utils/options';
 
 export { Undici } from './core/Undici';
 export { HTTPError } from './core/errors';
@@ -12,14 +11,6 @@ export * from './types/hooks';
 export * from './types/options';
 export * from './core/retry';
 export type { ResponsePromise } from './core/ResponsePromise';
-
-const fetchWithDebug = (input: string | URL | Request, init?: any) => {
-  if (init?.debug) {
-    // eslint-disable-next-line no-console
-    console.log(generateCurlCommand(input as Request));
-  }
-  return undiciFetch(input, init);
-};
 
 export type UndiciInstance = {
   /**
@@ -53,7 +44,7 @@ export type UndiciInstance = {
   extend(extendedOptions: UndiciOptions): UndiciInstance;
 
   /** Returns the number of requests currently queued by the throttler. */
-  readonly queueSize?: number;
+  readonly queueSize: number;
 
   /**
    * Paginate through an API.
@@ -67,89 +58,18 @@ export type UndiciInstance = {
   paginate<T = any>(input: string | URL | Request, options?: UndiciOptions): AsyncIterable<T>;
 };
 
-function mergeOptions(base: UndiciOptions, extended: UndiciOptions): UndiciOptions {
-  const headers = new Headers(base.headers as any);
-  if (extended.headers) {
-    const extendedHeaders = new Headers(extended.headers as any);
-    for (const [key, value] of extendedHeaders) {
-      headers.set(key, value);
-    }
-  }
-
-  const hooks = { ...base.hooks };
-  if (extended.hooks) {
-    for (const key of Object.keys(extended.hooks) as Array<keyof typeof hooks>) {
-      hooks[key] = [...(hooks[key] || []), ...(extended.hooks[key] || [])] as any;
-    }
-  }
-
-  let { retry } = extended;
-  if (typeof base.retry === 'object' && typeof extended.retry === 'object') {
-    retry = { ...base.retry, ...extended.retry };
-  }
-
-  let { searchParams } = extended;
-  if (base.searchParams && extended.searchParams) {
-    const baseParams = new URLSearchParams(base.searchParams as any);
-    const extendedParams = new URLSearchParams(extended.searchParams as any);
-    for (const [key, value] of extendedParams) {
-      baseParams.set(key, value);
-    }
-    searchParams = baseParams;
-  } else if (base.searchParams) {
-    searchParams = new URLSearchParams(base.searchParams as any);
-  } else if (extended.searchParams) {
-    searchParams = new URLSearchParams(extended.searchParams as any);
-  }
-
-  let { signal } = extended;
-  if (base.signal && extended.signal) {
-    signal = AbortSignal.any([base.signal, extended.signal]);
-  } else if (base.signal) {
-    signal = base.signal;
-  }
-
-  return {
-    ...base,
-    ...extended,
-    headers,
-    hooks,
-    retry,
-    searchParams,
-    signal,
-    dispatcher: extended.dispatcher ?? base.dispatcher,
-  };
-}
-
-function createInstance(
-  defaultOptions: UndiciOptions = {},
-  dependencies?: UndiciDependencies
-): UndiciInstance {
-  let instanceFetch = dependencies?.fetch || (defaultOptions.throttle ? undefined : fetchWithDebug);
-
-  if (!instanceFetch && defaultOptions.throttle) {
-    instanceFetch = throttle(fetchWithDebug, defaultOptions.throttle);
-  }
+function createInstance(defaultOptions: UndiciOptions = {}): UndiciInstance {
+  const client = new Undici(defaultOptions);
 
   const instance = (input: string | URL | Request, options?: UndiciOptions) => {
-    const combinedOptions = mergeOptions(defaultOptions, options || {});
-
-    let fetchToUse = instanceFetch;
-    if (options?.throttle) {
-      fetchToUse = throttle(fetchWithDebug, options.throttle);
-    }
-
-    const extra = new Undici(input, combinedOptions, { fetch: fetchToUse });
-    return createResponsePromise(extra.execute());
+    return createResponsePromise(client.execute(input, options));
   };
 
-  if (instanceFetch && 'queueSize' in instanceFetch) {
-    Object.defineProperty(instance, 'queueSize', {
-      get: () => (instanceFetch as any).queueSize,
-      configurable: true,
-      enumerable: true,
-    });
-  }
+  Object.defineProperty(instance, 'queueSize', {
+    get: () => client.queueSize,
+    configurable: true,
+    enumerable: true,
+  });
 
   instance.get = (input: string | URL | Request, options?: UndiciOptions) =>
     instance(input, { ...options, method: 'GET' });
@@ -167,25 +87,11 @@ function createInstance(
   instance.create = (newOptions: UndiciOptions) => createInstance(newOptions);
   instance.extend = (extendedOptions: UndiciOptions) => {
     const newOptions = mergeOptions(defaultOptions, extendedOptions);
-    let nextDependencies: UndiciDependencies = {};
-
-    if (!extendedOptions.throttle) {
-      nextDependencies = { fetch: instanceFetch };
-    }
-
-    return createInstance(newOptions, nextDependencies);
+    return createInstance(newOptions);
   };
 
   instance.paginate = <T = any>(input: string | URL | Request, options?: UndiciOptions) => {
-    const combinedOptions = mergeOptions(defaultOptions, options || {});
-
-    let fetchToUse = instanceFetch;
-    if (options?.throttle) {
-      fetchToUse = throttle(fetchWithDebug, options.throttle);
-    }
-
-    const extra = new Undici(input, combinedOptions, { fetch: fetchToUse });
-    return extra.paginate<T>();
+    return client.paginate<T>(input, options);
   };
 
   return instance as UndiciInstance;
