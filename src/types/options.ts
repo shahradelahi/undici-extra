@@ -37,9 +37,7 @@ export interface UndiciOptions extends RequestInit {
 
   /** Search parameters to append to the URL. */
   searchParams?:
-    | string
-    | Record<string, string | number | boolean | undefined | null>
-    | URLSearchParams;
+    string | Record<string, string | number | boolean | undefined | null> | URLSearchParams;
 
   /** Request timeout in milliseconds. */
   timeout?: number;
