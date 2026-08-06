@@ -1,5 +1,11 @@
 # undici-extra
 
+## 1.2.1
+
+### Patch Changes
+
+- b3fb4b6: Fix TypeScript type resolution for CJS and ESM exports by adding conditional types to `package.json` exports and including `.d.cts` files.
+
 ## 1.2.0
 
 ### Minor Changes
