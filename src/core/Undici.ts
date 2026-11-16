@@ -1,7 +1,15 @@
 import { throttle } from '@se-oss/throttle';
+import { CookieFile } from 'http-cookie-file';
 import { Request, Response, fetch as undiciFetch } from 'undici';
 
-import type { UndiciOptions } from '../types/options';
+import type { CookieStore, UndiciOptions } from '../types/options';
+import {
+  isCookieFilePath,
+  isCookiesRecord,
+  isCookieStore,
+  mergeCookieHeaders,
+  serializeCookiesRecord,
+} from '../utils/cookies';
 import { generateCurlCommand } from '../utils/curl';
 import { delay } from '../utils/delay';
 import { mergeOptions } from '../utils/options';
@@ -12,14 +20,21 @@ import { normalizeRetryOptions } from './retry';
 export class Undici {
   static #pendingRequests = new Map<string, Promise<Response>>();
 
-  #options: UndiciOptions;
-  #throttler?: any;
+  readonly #options: UndiciOptions;
+  readonly #throttler?: any;
+  readonly #cookieStore?: CookieStore;
 
   constructor(options: UndiciOptions = {}) {
     this.#options = { ...options };
 
     if (options.throttle) {
       this.#throttler = throttle(undiciFetch, options.throttle);
+    }
+
+    if (isCookieStore(options.cookies)) {
+      this.#cookieStore = options.cookies;
+    } else if (isCookieFilePath(options.cookies)) {
+      this.#cookieStore = new CookieFile(options.cookies);
     }
   }
 
@@ -33,7 +48,7 @@ export class Undici {
 
   async #prepareRequest(input: string | URL | Request, options: UndiciOptions): Promise<Request> {
     let finalInput = input;
-    const { prefixUrl, json, headers, searchParams, ...rest } = options;
+    const { prefixUrl, json, headers, searchParams, cookies, ...rest } = options;
 
     if (prefixUrl && typeof finalInput === 'string') {
       finalInput = new URL(finalInput, prefixUrl).toString();
@@ -49,6 +64,39 @@ export class Undici {
     }
 
     const normalizedHeaders = new Headers(headers as any);
+
+    let storeCookieHeader: string | undefined;
+    const activeStore = isCookieStore(cookies)
+      ? cookies
+      : isCookieFilePath(cookies)
+        ? new CookieFile(cookies)
+        : this.#cookieStore;
+
+    if (activeStore) {
+      const requestUrl =
+        typeof finalInput === 'string'
+          ? new URL(finalInput)
+          : finalInput instanceof Request
+            ? new URL(finalInput.url)
+            : finalInput;
+      storeCookieHeader = await activeStore.getCookieHeader(requestUrl);
+    }
+
+    const recordCookieHeader = isCookiesRecord(cookies)
+      ? serializeCookiesRecord(cookies)
+      : undefined;
+    const explicitCookieHeader = normalizedHeaders.get('cookie') ?? undefined;
+
+    const finalCookieHeader = mergeCookieHeaders(
+      storeCookieHeader,
+      recordCookieHeader,
+      explicitCookieHeader
+    );
+
+    if (finalCookieHeader) {
+      normalizedHeaders.set('cookie', finalCookieHeader);
+    }
+
     const fetchOptions: any = { ...rest, headers: normalizedHeaders };
 
     if (json !== undefined) {
@@ -98,13 +146,19 @@ export class Undici {
       dispatcher: customDispatcher,
       unixSocket,
       debug,
+      cookies,
     } = options;
     const retryConfig = normalizeRetryOptions(retry);
     let retryCount = 0;
 
+    const activeStore = isCookieStore(cookies)
+      ? cookies
+      : isCookieFilePath(cookies)
+        ? new CookieFile(cookies)
+        : this.#cookieStore;
+
     const dispatcher = resolveDispatcher(customDispatcher as any, proxy, unixSocket);
 
-    // 1. Hook: beforeRequest
     if (hooks?.beforeRequest) {
       for (const hook of hooks.beforeRequest) {
         const result = await hook(activeRequest, options);
@@ -155,7 +209,10 @@ export class Undici {
       try {
         let response = await makeRequest(activeRequest);
 
-        // 2. Hook: afterResponse
+        if (activeStore) {
+          await activeStore.setFromResponse(response, activeRequest.url);
+        }
+
         if (hooks?.afterResponse) {
           for (const hook of hooks.afterResponse) {
             const modified = await hook(activeRequest, options, response);
@@ -174,7 +231,6 @@ export class Undici {
         if (shouldRetry) {
           retryCount++;
 
-          // 3. Hook: beforeRetry
           if (hooks?.beforeRetry) {
             for (const hook of hooks.beforeRetry) {
               await hook({ request: activeRequest, options, error, retryCount });

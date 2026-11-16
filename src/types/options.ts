@@ -7,6 +7,15 @@ import type { Hooks } from './hooks';
 
 export type { ThrottleOptions };
 
+export interface CookieStore {
+  getCookieHeader(url: string | URL): string | Promise<string>;
+  setFromResponse(response: any, url: string | URL): void | Promise<void>;
+}
+
+export type CookiesRecord = Record<string, string | number | boolean | undefined | null>;
+
+export type CookiesOption = CookieStore | string | URL | CookiesRecord;
+
 export interface UndiciOptions extends RequestInit {
   /**
    * Rate limit configuration.
@@ -38,6 +47,9 @@ export interface UndiciOptions extends RequestInit {
   /** Search parameters to append to the URL. */
   searchParams?:
     string | Record<string, string | number | boolean | undefined | null> | URLSearchParams;
+
+  /** Cookies to send with the request, or a cookie file/store to manage automatically. */
+  cookies?: CookiesOption;
 
   /** Request timeout in milliseconds. */
   timeout?: number;

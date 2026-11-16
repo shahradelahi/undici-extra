@@ -1,4 +1,5 @@
 import type { UndiciOptions } from '../types/options';
+import { isCookiesRecord } from './cookies';
 
 export function mergeOptions(base: UndiciOptions, extended: UndiciOptions): UndiciOptions {
   const headers = new Headers(base.headers as any);
@@ -35,6 +36,11 @@ export function mergeOptions(base: UndiciOptions, extended: UndiciOptions): Undi
     searchParams = new URLSearchParams(extended.searchParams as any);
   }
 
+  let cookies = extended.cookies ?? base.cookies;
+  if (isCookiesRecord(base.cookies) && isCookiesRecord(extended.cookies)) {
+    cookies = { ...base.cookies, ...extended.cookies };
+  }
+
   let { signal } = extended;
   if (base.signal && extended.signal) {
     signal = AbortSignal.any([base.signal, extended.signal]);
@@ -51,6 +57,7 @@ export function mergeOptions(base: UndiciOptions, extended: UndiciOptions): Undi
     hooks,
     retry,
     searchParams,
+    cookies,
     signal,
     dispatcher: extended.dispatcher ?? base.dispatcher,
   };
