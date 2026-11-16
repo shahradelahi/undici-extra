@@ -1,10 +1,13 @@
+import { CookieFile } from 'http-cookie-file';
 import type { Request } from 'undici';
 
 import { createResponsePromise, type ResponsePromise } from './core/ResponsePromise';
 import { Undici } from './core/Undici';
 import type { UndiciOptions } from './types/options';
+import { isCookieFilePath } from './utils/cookies';
 import { mergeOptions } from './utils/options';
 
+export { CookieFile } from 'http-cookie-file';
 export { Undici } from './core/Undici';
 export { HTTPError } from './core/errors';
 export * from './types/hooks';
@@ -58,8 +61,16 @@ export type UndiciInstance = {
   paginate<T = any>(input: string | URL | Request, options?: UndiciOptions): AsyncIterable<T>;
 };
 
+function normalizeDefaultOptions(options: UndiciOptions): UndiciOptions {
+  if (isCookieFilePath(options.cookies)) {
+    return { ...options, cookies: new CookieFile(options.cookies) };
+  }
+  return options;
+}
+
 function createInstance(defaultOptions: UndiciOptions = {}): UndiciInstance {
-  const client = new Undici(defaultOptions);
+  const normalizedOptions = normalizeDefaultOptions(defaultOptions);
+  const client = new Undici(normalizedOptions);
 
   const instance = (input: string | URL | Request, options?: UndiciOptions) => {
     return createResponsePromise(client.execute(input, options));
@@ -86,7 +97,7 @@ function createInstance(defaultOptions: UndiciOptions = {}): UndiciInstance {
 
   instance.create = (newOptions: UndiciOptions) => createInstance(newOptions);
   instance.extend = (extendedOptions: UndiciOptions) => {
-    const newOptions = mergeOptions(defaultOptions, extendedOptions);
+    const newOptions = mergeOptions(normalizedOptions, extendedOptions);
     return createInstance(newOptions);
   };
 

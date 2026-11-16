@@ -13,6 +13,7 @@ _undici-extra_ wraps `undici.fetch` to provide an elegant and familiar API while
 ## Benefits
 
 - **Elegant API:** Method shortcuts (`.post()`, `.put()`) and direct response parsing (`.json()`, `.text()`).
+- **Cookie Store:** Built-in cookie management using structured objects or persistent `http-cookie-file` cookie files.
 - **Smart Dispatcher:** Automatic handling and caching for Proxies and Unix Sockets.
 - **Robust Retries:** Built-in retry logic with exponential backoff and customizable status codes.
 - **Request Lifecycle:** Flexible hooks for `beforeRequest`, `afterResponse`, and `beforeRetry`.
@@ -198,6 +199,27 @@ await Promise.all([client('https://api.com/1'), client('https://api.com/2')]);
 
 // Monitor the queue
 console.log(client.queueSize);
+```
+
+### Cookies
+
+Pass structured key-value cookies, a cookie file path, or a `CookieFile` instance.
+
+```ts
+import undici, { CookieFile } from 'undici-extra';
+
+// 1. One-off request cookies
+await undici('https://api.example.com', {
+  cookies: { session: 'abc123', theme: 'dark' },
+});
+
+// 2. Persistent cookie file jar
+const client = undici.create({
+  cookies: './cookies.txt',
+});
+
+// Automatically captures Set-Cookie headers and persists them atomically to disk
+await client('https://api.example.com/login');
 ```
 
 ### Debugging
