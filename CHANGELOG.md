@@ -1,5 +1,11 @@
 # undici-extra
 
+## 1.3.0
+
+### Minor Changes
+
+- c70db4f: Add built-in cookie store management and support for key-value cookie records.
+
 ## 1.2.1
 
 ### Patch Changes
